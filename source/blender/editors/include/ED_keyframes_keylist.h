@@ -36,6 +36,9 @@ typedef struct ActKeyBlockInfo {
 
   /* Selection flag. */
   char sel;
+
+  /* Interpolation mode. */
+  signed char ipo;
 } ActKeyBlockInfo;
 
 /* Keyframe Column Struct */
