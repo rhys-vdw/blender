@@ -752,6 +752,16 @@ static void target_project_tri_jacobian(void *userdata, const float x[3], float 
   madd_v3_v3fl(r_jacobian[2], data->n1_minus_n2, x[1]);
 }
 
+/* Retrieve maximum deviation of the barycentric weights outside the triangle. */
+static float target_project_tri_error(float x[3])
+{
+  float error = 0.0f;
+  error = max_ff(error, -x[0]);
+  error = max_ff(error, -x[1]);
+  error = max_ff(error, x[0] + x[1] - 1.0f);
+  return error;
+}
+
 /* Clamp barycentric weights to the triangle. */
 static void target_project_tri_clamp(float x[3])
 {
@@ -773,71 +783,26 @@ static bool target_project_tri_correct(void * /*userdata*/,
                                        float step[3],
                                        float x_next[3])
 {
-  /* Insignificant correction threshold */
-  const float epsilon = 1e-5f;
-  /* Dot product threshold for checking if step is 'clearly' pointing outside. */
-  const float dir_epsilon = 0.5f;
-  bool fixed = false, locked = false;
+  const float error = target_project_tri_error(x_next);
 
-  /* The barycentric coordinate domain is a triangle bounded by
-   * the X and Y axes, plus the x+y=1 diagonal. First, clamp the
-   * movement against the diagonal. Note that step is subtracted. */
-  float sum = x[0] + x[1];
-  float sstep = -(step[0] + step[1]);
-
-  if (sum + sstep > 1.0f) {
-    float ldist = 1.0f - sum;
-
-    /* If already at the boundary, slide along it. */
-    if (ldist < epsilon * float(M_SQRT2)) {
-      float step_len = len_v2(step);
-
-      /* Abort if the solution is clearly outside the domain. */
-      if (step_len > epsilon && sstep > step_len * dir_epsilon * float(M_SQRT2)) {
-        return false;
-      }
-
-      /* Project the new position onto the diagonal. */
-      add_v2_fl(step, (sum + sstep - 1.0f) * 0.5f);
-      fixed = locked = true;
-    }
-    else {
-      /* Scale a significant step down to arrive at the boundary. */
-      mul_v3_fl(step, ldist / sstep);
-      fixed = true;
-    }
+  /* Immediately abort on a clearly wrong point.
+   *
+   * It is not appropriate to abort unless the value is extremely
+   * wrong, because if the goal function gradient forms a sharp
+   * valley with a gently sloping bottom, the iterative process may
+   * be dragged against the edge of the domain by local gradients
+   * for a number of steps even when the ultimate minimum is within
+   * the domain.
+   *
+   * This threshold basically represents an estimate of something so
+   * far outside the domain that all assumptions about the solution
+   * behavior are off.
+   */
+  if (error >= 10.0f) {
+    return false;
   }
 
-  /* Weight 0 and 1 boundary checks - along axis. */
-  for (int i = 0; i < 2; i++) {
-    if (step[i] > x[i]) {
-      /* If already at the boundary, slide along it. */
-      if (x[i] < epsilon) {
-        float step_len = len_v2(step);
-
-        /* Abort if the solution is clearly outside the domain. */
-        if (step_len > epsilon && (locked || step[i] > step_len * dir_epsilon)) {
-          return false;
-        }
-
-        /* Reset precision errors to stay at the boundary. */
-        step[i] = x[i];
-        fixed = true;
-      }
-      else {
-        /* Scale a significant step down to arrive at the boundary. */
-        mul_v3_fl(step, x[i] / step[i]);
-        fixed = true;
-      }
-    }
-  }
-
-  /* Recompute and clamp the new coordinates after step correction. */
-  if (fixed) {
-    sub_v3_v3v3(x_next, x, step);
-    target_project_tri_clamp(x_next);
-  }
-
+  /* Otherwise just continue iterations normally. */
   return true;
 }
 
@@ -854,6 +819,7 @@ static bool target_project_solve_point_tri(const float *vtri_co[3],
   float magnitude_estimate = dist + len_manhattan_v3(vtri_co[0]) + len_manhattan_v3(vtri_co[1]) +
                              len_manhattan_v3(vtri_co[2]);
   float epsilon = magnitude_estimate * 1.0e-6f;
+  float det_epsilon = square_f(magnitude_estimate) * 1e-6f;
 
   /* Initial solution vector: barycentric weights plus distance along normal. */
   interp_weights_tri_v3(x, UNPACK3(vtri_co), hit_co);
@@ -888,11 +854,14 @@ static bool target_project_solve_point_tri(const float *vtri_co[3],
                                &tri_data,
                                epsilon,
                                20,
+                               det_epsilon,
+                               5, /* >= 32x overshoot */
                                trace,
                                x,
                                x);
 
-  if (ok) {
+  /* If found a suitable solution within the triangle. */
+  if (ok && target_project_tri_error(x) < epsilon) {
     copy_v3_v3(r_hit_co, tri_data.co_interp);
     copy_v3_v3(r_hit_no, tri_data.no_interp);
 
@@ -1069,7 +1038,7 @@ void BKE_shrinkwrap_find_nearest_surface(ShrinkwrapTreeData *tree,
 
   if (type == MOD_SHRINKWRAP_TARGET_PROJECT) {
 #ifdef TRACE_TARGET_PROJECT
-    printf("\n====== TARGET PROJECT START ======\n");
+    printf("\n====== TARGET PROJECT START: (%.3f,%.3f,%.3f) ======\n", UNPACK3(co));
 #endif
 
     BLI_bvhtree_find_nearest_ex(

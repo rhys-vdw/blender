@@ -91,6 +91,8 @@ typedef bool (*Newton3D_CorrectionFunc)(void *userdata,
  * \param userdata: Data for the callbacks.
  * \param epsilon: Desired precision.
  * \param max_iterations: Limit on the iterations.
+ * \param det_epsilon: Minimum allowed value for the Jacobian determinant (singularity threshold).
+ * \param max_line_steps: Maximum number of line search steps (overshoot by >= 2^steps times).
  * \param trace: Enables logging to console.
  * \param x_init: Initial solution vector.
  * \param result: Final result.
@@ -102,6 +104,8 @@ bool BLI_newton3d_solve(Newton3D_DeltaFunc func_delta,
                         void *userdata,
                         float epsilon,
                         int max_iterations,
+                        float det_epsilon,
+                        int max_line_steps,
                         bool trace,
                         const float x_init[3],
                         float result[3]);

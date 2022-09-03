@@ -153,12 +153,14 @@ bool BLI_newton3d_solve(Newton3D_DeltaFunc func_delta,
                         void *userdata,
                         float epsilon,
                         int max_iterations,
+                        float det_epsilon,
+                        int max_line_steps,
                         bool trace,
                         const float x_init[3],
                         float result[3])
 {
   float fdelta[3], fdeltav, next_fdeltav;
-  float jacobian[3][3], step[3], x[3], x_next[3];
+  float jacobian[3][3], inv_jacobian[3][3], step[3], x[3], x_next[3], x_check[3];
 
   epsilon *= epsilon;
 
@@ -175,23 +177,16 @@ bool BLI_newton3d_solve(Newton3D_DeltaFunc func_delta,
     /* Newton's method step. */
     func_jacobian(userdata, x, jacobian);
 
-    if (!invert_m3(jacobian)) {
+    if (!invert_m3_m3_ex(inv_jacobian, jacobian, det_epsilon)) {
+      if (trace) {
+        /* The Jacobian determinant was close to zero, signifying a nearby singularity. */
+        printf("SINGULARITY\n");
+      }
       return false;
     }
 
-    mul_v3_m3v3(step, jacobian, fdelta);
+    mul_v3_m3v3(step, inv_jacobian, fdelta);
     sub_v3_v3v3(x_next, x, step);
-
-    /* Custom out-of-bounds value correction. */
-    if (func_correction) {
-      if (trace) {
-        printf("%3d * (%g, %g, %g)\n", i, x_next[0], x_next[1], x_next[2]);
-      }
-
-      if (!func_correction(userdata, x, step, x_next)) {
-        return false;
-      }
-    }
 
     func_delta(userdata, x_next, fdelta);
     next_fdeltav = len_squared_v3(fdelta);
@@ -201,7 +196,14 @@ bool BLI_newton3d_solve(Newton3D_DeltaFunc func_delta,
     }
 
     /* Line search correction. */
-    while (next_fdeltav > fdeltav && next_fdeltav > epsilon) {
+    for (int j = 0; next_fdeltav > fdeltav && next_fdeltav > epsilon; j++) {
+      if (j >= max_line_steps) {
+        /* This means the iteration step was more than 2^j times the correct distance,
+         * which is a sign of a nearby singularity making the solution unstable. */
+        printf("OVERSHOOT\n");
+        return false;
+      }
+
       float g0 = sqrtf(fdeltav), g1 = sqrtf(next_fdeltav);
       float g01 = -g0 / len_v3(step);
       float det = 2.0f * (g1 - g0 - g01);
@@ -216,6 +218,24 @@ bool BLI_newton3d_solve(Newton3D_DeltaFunc func_delta,
 
       if (trace) {
         printf("%3d . (%g, %g, %g) %g\n", i, x_next[0], x_next[1], x_next[2], next_fdeltav);
+      }
+    }
+
+    /* Custom out-of-bounds value correction. */
+    if (func_correction) {
+      copy_v3_v3(x_check, x_next);
+
+      if (!func_correction(userdata, x, step, x_next)) {
+        return false;
+      }
+
+      if (!equals_v3v3(x_check, x_next)) {
+        func_delta(userdata, x_next, fdelta);
+        next_fdeltav = len_squared_v3(fdelta);
+
+        if (trace) {
+          printf("%3d * (%g, %g, %g) %g\n", i, x_next[0], x_next[1], x_next[2], next_fdeltav);
+        }
       }
     }
 
