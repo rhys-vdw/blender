@@ -195,6 +195,51 @@ bool GPU_stack_link(GPUMaterial *mat,
                     GPUNodeStack *out,
                     ...);
 
+/** Comparison operator for conditionals. */
+typedef enum {
+  GPU_CMP_NE = 0,
+  GPU_CMP_LT,
+  GPU_CMP_LE,
+  GPU_CMP_EQ,
+  GPU_CMP_GE,
+  GPU_CMP_GT,
+} GPUComparisonOp;
+
+/**
+ * Create a runtime ternary conditional, choosing between two inputs based on
+ * comparing a scalar float input with a constant threshold.
+ *
+ * \param cmp_input: Input to compare with the threshold.
+ * \param result_type: Type of value to produce.
+ * \param if_true: Input to use when the condition is true.
+ * \param if_false: Input to use when the condition is false. If null, this signifies
+ * the conditional is an optimization hint the input is unused if the condition is false.
+ * Depending on context, a valid default value is used, or the conditional may be discarded
+ * if it produces no performance benefit.
+ */
+GPUNodeLink *GPU_link_conditional(GPUMaterial *mat,
+                                  GPUNodeLink *cmp_input,
+                                  GPUComparisonOp cmp,
+                                  float threshold,
+                                  eGPUType result_type,
+                                  GPUNodeLink *if_true,
+                                  GPUNodeLink *if_false);
+
+/**
+ * Introduces a predicate for evaluating a stack input only when necessary.
+ * The conditional is only added if both inputs are non-constant.
+ *
+ * \param cmp_input: Input to compare with the threshold.
+ * \param inout_if_true: Stack entry to wrap in the conditional, suppressing evaluation when false.
+ * The link field within the entry is updated in place.
+ * \return true if the conditional was actually added.
+ */
+bool GPU_stack_link_conditional(GPUMaterial *mat,
+                                GPUNodeStack *cmp_input,
+                                GPUComparisonOp cmp,
+                                float threshold,
+                                GPUNodeStack *inout_if_true);
+
 void GPU_material_output_surface(GPUMaterial *material, GPUNodeLink *link);
 void GPU_material_output_volume(GPUMaterial *material, GPUNodeLink *link);
 void GPU_material_output_displacement(GPUMaterial *material, GPUNodeLink *link);

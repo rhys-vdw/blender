@@ -40,6 +40,7 @@
 
 #include <cstdarg>
 #include <cstring>
+#include <map>
 
 #include <sstream>
 #include <string>
@@ -205,9 +206,25 @@ static std::ostream &operator<<(std::ostream &stream, const GPUInput *input)
   }
 }
 
-static std::ostream &operator<<(std::ostream &stream, const GPUOutput *output)
+static std::ostream &operator<<(std::ostream &stream, GPUComparisonOp cmp)
 {
-  return stream << SRC_NAME("out", output, outputs, "tmp") << output->id;
+  switch (cmp) {
+    case GPU_CMP_NE:
+      return stream << "!=";
+    case GPU_CMP_LT:
+      return stream << "<";
+    case GPU_CMP_LE:
+      return stream << "<=";
+    case GPU_CMP_EQ:
+      return stream << "==";
+    case GPU_CMP_GE:
+      return stream << ">=";
+    case GPU_CMP_GT:
+      return stream << ">";
+    default:
+      BLI_assert(0);
+      return stream;
+  }
 }
 
 /* Trick type to change overload and keep a somewhat nice syntax. */
@@ -295,7 +312,6 @@ class GPUCodegen {
  private:
   void set_unique_ids();
 
-  void node_serialize(std::stringstream &eval_ss, const GPUNode *node);
   char *graph_serialize(eGPUNodeTag tree_tag, GPUNodeLink *output_link);
   char *graph_serialize(eGPUNodeTag tree_tag);
 
@@ -461,71 +477,510 @@ void GPUCodegen::generate_library()
   }
 }
 
-void GPUCodegen::node_serialize(std::stringstream &eval_ss, const GPUNode *node)
+class GPUCodegenSerializer {
+  GPUNodeGraph &graph;
+  eGPUNodeTag tree_tag;
+  GPUNodeLink *output_link;
+
+  struct NodeInfo {
+    int branch;
+  };
+
+  std::vector<NodeInfo> node_info;
+
+  struct BranchInfo {
+    int parent;
+    int num_nodes;
+    std::vector<GPUNode *> nodes;
+  };
+
+  std::vector<BranchInfo> branch_info;
+
+  std::map<int, int> output_map;
+
+ private:
+  int find_remapped_output(int id);
+
+  bool remap_input_to_output(const GPUOutput *to, const GPUInput *from);
+  bool remap_output_to_input(const GPUInput *to, const GPUOutput *from);
+
+  bool is_empty_conditional(const GPUNodeConditional *cond);
+  bool is_empty_conditional(const GPUNode *node);
+
+  static eGPUType get_true_input_type(const GPUInput *input);
+  static const char *get_default_value(eGPUType type);
+
+  void node_serialize_input_decl(std::stringstream &eval_ss,
+                                 const std::string &indent,
+                                 const GPUInput *input);
+  void node_serialize_input(std::stringstream &eval_ss, const GPUInput *input);
+
+  void node_serialize_output_decl(std::stringstream &eval_ss,
+                                  const std::string &indent,
+                                  const GPUOutput *output);
+  void node_serialize_output(std::stringstream &eval_ss, const GPUOutput *output);
+
+  void node_serialize_call(std::stringstream &eval_ss,
+                           const std::string &indent,
+                           const GPUNode *node);
+  void node_serialize_cond(std::stringstream &eval_ss,
+                           const std::string &indent,
+                           const GPUNodeConditional *cond);
+
+  void branch_serialize(std::stringstream &eval_ss, const std::string &indent, BranchInfo &branch);
+
+  void build_branches();
+  void assign_node_branch(NodeInfo &info, int branch);
+  void propagate_input_branch(const GPUNode *from, const GPUNodeLink *link, int branch);
+
+ public:
+  GPUCodegenSerializer(GPUNodeGraph &graph,
+                       eGPUNodeTag tree_tag,
+                       GPUNodeLink *output_link = nullptr)
+      : graph(graph),
+        tree_tag(tree_tag),
+        output_link(output_link),
+        node_info(graph.num_nodes, NodeInfo{-1}),
+        branch_info(graph.num_branches, BranchInfo{-1, 0})
+  {
+  }
+
+  void serialize(std::stringstream &eval_ss);
+};
+
+int GPUCodegenSerializer::find_remapped_output(int id)
+{
+  std::map<int, int>::iterator it = output_map.find(id);
+
+  return (it != output_map.end()) ? it->second : id;
+}
+
+bool GPUCodegenSerializer::remap_input_to_output(const GPUOutput *to, const GPUInput *from)
+{
+  /* Alias the backing storage of the input with the output. */
+  if (from->source == GPU_SOURCE_OUTPUT && from->link->output->type == to->type) {
+    BLI_assert(output_map.count(from->link->output->id) == 0);
+
+    output_map[from->link->output->id] = find_remapped_output(to->id);
+
+    /* Pass through blank conditionals. */
+    const GPUNode *node = from->link->output->node;
+
+    if (is_empty_conditional(node)) {
+      GPUInput *in_true = static_cast<GPUInput *>(node->inputs.first)->next;
+      remap_input_to_output(to, in_true);
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+bool GPUCodegenSerializer::remap_output_to_input(const GPUInput *to, const GPUOutput *from)
+{
+  /* Alias the backing storage of the output with the input. */
+  if (to->source == GPU_SOURCE_OUTPUT && to->link->output->type == from->type) {
+    int new_id = find_remapped_output(to->link->output->id);
+    int cur_id = find_remapped_output(from->id);
+
+    /* Already remapped to the same ID somehow. */
+    if (cur_id == new_id) {
+      return true;
+    }
+
+    /* Only remap if not already remapped. */
+    if (cur_id == from->id) {
+      output_map[from->id] = new_id;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void GPUCodegenSerializer::node_serialize_input_decl(std::stringstream &eval_ss,
+                                                     const std::string &indent,
+                                                     const GPUInput *input)
+{
+  switch (input->source) {
+    case GPU_SOURCE_FUNCTION_CALL:
+      eval_ss << indent << input->type << " " << input << "; " << input->function_call << input
+              << ");\n";
+      break;
+    case GPU_SOURCE_STRUCT:
+      eval_ss << indent << input->type << " " << input << " = CLOSURE_DEFAULT;\n";
+      break;
+    case GPU_SOURCE_CONSTANT:
+      eval_ss << indent << input->type << " " << input << " = " << (GPUConstant *)input << ";\n";
+      break;
+    default:
+      break;
+  }
+}
+
+eGPUType GPUCodegenSerializer::get_true_input_type(const GPUInput *input)
+{
+  switch (input->source) {
+    case GPU_SOURCE_ATTR:
+      return input->attr->gputype;
+    case GPU_SOURCE_OUTPUT:
+      return input->link->output->type;
+    default:
+      return input->type;
+  }
+}
+
+const char *GPUCodegenSerializer::get_default_value(eGPUType type)
+{
+  switch (type) {
+    case GPU_FLOAT:
+      return "0.0";
+    case GPU_VEC2:
+      return "vec2(0.0)";
+    case GPU_VEC3:
+      return "vec3(0.0)";
+    case GPU_VEC4:
+      return "vec4(0.0)";
+    case GPU_MAT3:
+      return "mat3(1.0)";
+    case GPU_MAT4:
+      return "mat4(1.0)";
+    case GPU_CLOSURE:
+      return "CLOSURE_DEFAULT";
+    default:
+      return nullptr;
+  }
+}
+
+void GPUCodegenSerializer::node_serialize_input(std::stringstream &eval_ss, const GPUInput *input)
+{
+  switch (input->source) {
+    case GPU_SOURCE_OUTPUT:
+    case GPU_SOURCE_ATTR: {
+      /* These inputs can have non matching types. Do conversion. */
+      eGPUType to = input->type;
+      eGPUType from = get_true_input_type(input);
+
+      if (from != to) {
+        /* Use defines declared inside codegen_lib (i.e: vec4_from_float). */
+        eval_ss << to << "_from_" << from << "(";
+      }
+
+      if (input->source == GPU_SOURCE_ATTR) {
+        eval_ss << input;
+      }
+      else {
+        node_serialize_output(eval_ss, input->link->output);
+      }
+
+      if (from != to) {
+        eval_ss << ")";
+      }
+      break;
+    }
+    default:
+      eval_ss << input;
+      break;
+  }
+}
+
+void GPUCodegenSerializer::node_serialize_output_decl(std::stringstream &eval_ss,
+                                                      const std::string &indent,
+                                                      const GPUOutput *output)
+{
+  if (output_map.count(output->id) == 0) {
+    eval_ss << indent << output->type << " ";
+    node_serialize_output(eval_ss, output);
+    eval_ss << ";\n";
+  }
+}
+
+void GPUCodegenSerializer::node_serialize_output(std::stringstream &eval_ss,
+                                                 const GPUOutput *output)
+{
+  eval_ss << SRC_NAME("out", output, outputs, "tmp") << find_remapped_output(output->id);
+}
+
+void GPUCodegenSerializer::node_serialize_call(std::stringstream &eval_ss,
+                                               const std::string &indent,
+                                               const GPUNode *node)
 {
   /* Declare constants. */
   LISTBASE_FOREACH (GPUInput *, input, &node->inputs) {
-    switch (input->source) {
-      case GPU_SOURCE_FUNCTION_CALL:
-        eval_ss << input->type << " " << input << "; " << input->function_call << input << ");\n";
-        break;
-      case GPU_SOURCE_STRUCT:
-        eval_ss << input->type << " " << input << " = CLOSURE_DEFAULT;\n";
-        break;
-      case GPU_SOURCE_CONSTANT:
-        eval_ss << input->type << " " << input << " = " << (GPUConstant *)input << ";\n";
-        break;
-      default:
-        break;
-    }
+    node_serialize_input_decl(eval_ss, indent, input);
   }
+
   /* Declare temporary variables for node output storage. */
   LISTBASE_FOREACH (GPUOutput *, output, &node->outputs) {
-    eval_ss << output->type << " " << output << ";\n";
+    node_serialize_output_decl(eval_ss, indent, output);
   }
 
   /* Function call. */
-  eval_ss << node->name << "(";
+  eval_ss << indent << node->name << "(";
   /* Input arguments. */
   LISTBASE_FOREACH (GPUInput *, input, &node->inputs) {
-    switch (input->source) {
-      case GPU_SOURCE_OUTPUT:
-      case GPU_SOURCE_ATTR: {
-        /* These inputs can have non matching types. Do conversion. */
-        eGPUType to = input->type;
-        eGPUType from = (input->source == GPU_SOURCE_ATTR) ? input->attr->gputype :
-                                                             input->link->output->type;
-        if (from != to) {
-          /* Use defines declared inside codegen_lib (i.e: vec4_from_float). */
-          eval_ss << to << "_from_" << from << "(";
-        }
-
-        if (input->source == GPU_SOURCE_ATTR) {
-          eval_ss << input;
-        }
-        else {
-          eval_ss << input->link->output;
-        }
-
-        if (from != to) {
-          eval_ss << ")";
-        }
-        break;
-      }
-      default:
-        eval_ss << input;
-        break;
-    }
+    node_serialize_input(eval_ss, input);
     eval_ss << ", ";
   }
   /* Output arguments. */
   LISTBASE_FOREACH (GPUOutput *, output, &node->outputs) {
-    eval_ss << output;
+    node_serialize_output(eval_ss, output);
     if (output->next) {
       eval_ss << ", ";
     }
   }
   eval_ss << ");\n\n";
+}
+
+bool GPUCodegenSerializer::is_empty_conditional(const GPUNodeConditional *cond)
+{
+  return cond->branch_false < 0 && branch_info[cond->branch_true].nodes.empty();
+}
+
+bool GPUCodegenSerializer::is_empty_conditional(const GPUNode *node)
+{
+  return node->type == GPU_NODE_CONDITIONAL &&
+         is_empty_conditional(reinterpret_cast<const GPUNodeConditional *>(node));
+}
+
+void GPUCodegenSerializer::node_serialize_cond(std::stringstream &eval_ss,
+                                               const std::string &indent,
+                                               const GPUNodeConditional *cond)
+{
+  GPUOutput *output = static_cast<GPUOutput *>(cond->node.outputs.first);
+
+  GPUInput *in_condition = static_cast<GPUInput *>(cond->node.inputs.first);
+  GPUInput *in_true = in_condition->next;
+  GPUInput *in_false = in_true->next;
+
+  if (!is_empty_conditional(cond)) {
+    std::string indent_nested = indent + " ";
+
+    /* Emit the branch condition. */
+    node_serialize_input_decl(eval_ss, indent, in_condition);
+    node_serialize_output_decl(eval_ss, indent, output);
+
+    eval_ss << indent << "if (";
+    node_serialize_input(eval_ss, in_condition);
+    eval_ss << " " << cond->cmp_type << " " << cond->threshold << ") {\n\n";
+
+    /* Remap the true branch result to alias conditional output if possible,
+     * and generate the conditional body. */
+    BranchInfo info_true = branch_info[cond->branch_true];
+
+    bool mapped_true = !info_true.nodes.empty() && remap_input_to_output(output, in_true);
+
+    branch_serialize(eval_ss, indent_nested, info_true);
+
+    /* Copy the true branch result to output if aliasing wasn't possible. */
+    if (!mapped_true) {
+      node_serialize_input_decl(eval_ss, indent_nested, in_true);
+
+      eval_ss << indent_nested;
+      node_serialize_output(eval_ss, output);
+      eval_ss << " = ";
+      node_serialize_input(eval_ss, in_true);
+      eval_ss << ";\n";
+    }
+
+    eval_ss << indent << "}\n";
+
+    /* Emit the else branch if available. */
+    if (in_false != nullptr) {
+      eval_ss << indent << "else {\n";
+
+      /* Remap the false branch result to alias conditional output if possible,
+       * and generate the conditional body. */
+      BranchInfo info_false = branch_info[cond->branch_false];
+
+      bool mapped_false = !info_false.nodes.empty() && remap_input_to_output(output, in_false);
+
+      branch_serialize(eval_ss, indent_nested, info_false);
+
+      /* Copy the false branch result to output if aliasing wasn't possible. */
+      if (!mapped_false) {
+        node_serialize_input_decl(eval_ss, indent_nested, in_false);
+
+        eval_ss << indent_nested;
+        node_serialize_output(eval_ss, output);
+        eval_ss << " = ";
+        node_serialize_input(eval_ss, in_false);
+        eval_ss << ";\n";
+      }
+
+      eval_ss << indent << "}\n";
+    }
+    /* If no else input is specified, try to use a reasonable default. */
+    else if (const char *defval = get_default_value(output->type)) {
+      eval_ss << indent << "else {\n" << indent_nested;
+      node_serialize_output(eval_ss, output);
+      eval_ss << " = " << defval << ";\n" << indent << "}\n";
+    }
+
+    eval_ss << "\n";
+  }
+  /* Try to eliminate an empty conditional by aliasing output with true input. */
+  else if (!remap_output_to_input(in_true, output)) {
+    /* If aliasing wasn't possible, emit an assignment to copy. */
+    node_serialize_input_decl(eval_ss, indent, in_true);
+    node_serialize_output_decl(eval_ss, indent, output);
+
+    eval_ss << indent;
+    node_serialize_output(eval_ss, output);
+    eval_ss << " = ";
+    node_serialize_input(eval_ss, in_true);
+    eval_ss << ";\n\n";
+  }
+}
+
+void GPUCodegenSerializer::branch_serialize(std::stringstream &eval_ss,
+                                            const std::string &indent,
+                                            BranchInfo &branch)
+{
+  for (GPUNode *node : branch.nodes) {
+    if (node->type == GPU_NODE_CONDITIONAL) {
+      GPUNodeConditional *cond = reinterpret_cast<GPUNodeConditional *>(node);
+      node_serialize_cond(eval_ss, indent, cond);
+    }
+    else {
+      node_serialize_call(eval_ss, indent, node);
+    }
+  }
+}
+
+void GPUCodegenSerializer::assign_node_branch(NodeInfo &info, int branch)
+{
+  BLI_assert(branch >= 0);
+
+  if (info.branch != branch) {
+    if (info.branch >= 0) {
+      branch_info[info.branch].num_nodes--;
+    }
+
+    info.branch = branch;
+    branch_info[info.branch].num_nodes++;
+  }
+}
+
+void GPUCodegenSerializer::propagate_input_branch(const GPUNode *from,
+                                                  const GPUNodeLink *link,
+                                                  int branch)
+{
+  BLI_assert(branch >= 0);
+
+  if (!link || !link->output) {
+    return;
+  }
+
+  const GPUNode *node = link->output->node;
+
+  /* Topology sort violation - can't happen but abort. */
+  if (node->index >= from->index) {
+    BLI_assert(from->index > node->index);
+    return;
+  }
+
+  BLI_assert((node->tag & tree_tag) != 0);
+
+  NodeInfo &info = node_info[node->index];
+
+  /* If already assigned to a branch, find the common parent branch. */
+  if (info.branch >= 0) {
+    int other_branch = info.branch;
+
+    /* The parent branch always has a smaller index. Use this to choose which
+     * one should go up one level to find a common parent. */
+    while (other_branch != branch) {
+      if (other_branch > branch) {
+        other_branch = branch_info[other_branch].parent;
+      }
+      else {
+        branch = branch_info[branch].parent;
+      }
+    }
+  }
+
+  assign_node_branch(info, branch);
+}
+
+void GPUCodegenSerializer::build_branches()
+{
+  /* First, build the branch tree and assign nodes to branches.
+   *
+   * NOTE: The node order is already top to bottom (or left to right in node editor)
+   * because of the evaluation order inside ntreeExecGPUNodes(). */
+  LISTBASE_FOREACH_BACKWARD (GPUNode *, node, &graph.nodes) {
+    if ((node->tag & tree_tag) == 0) {
+      continue;
+    }
+
+    /* Nodes not already assigned to a branch go to the top one. */
+    NodeInfo &info = node_info[node->index];
+
+    if (info.branch < 0) {
+      assign_node_branch(info, 0);
+    }
+
+    /* Propagate the branch to immediate inputs.
+     *
+     * This branch assignment is final because of reverse topology order processing. */
+    const int branch = info.branch;
+
+    if (node->type == GPU_NODE_CONDITIONAL) {
+      GPUNodeConditional *cond = reinterpret_cast<GPUNodeConditional *>(node);
+
+      GPUInput *in_condition = static_cast<GPUInput *>(node->inputs.first);
+      GPUInput *in_true = in_condition->next;
+      GPUInput *in_false = in_true->next;
+
+      /* First input is the condition input - assign to the same branch as the node. */
+      propagate_input_branch(node, in_condition->link, branch);
+
+      /* Second input is the true branch. */
+      branch_info[cond->branch_true].parent = branch;
+
+      propagate_input_branch(node, in_true->link, cond->branch_true);
+
+      /* Final input is the optional false branch. */
+      if (cond->branch_false >= 0) {
+        branch_info[cond->branch_false].parent = branch;
+
+        propagate_input_branch(node, in_false->link, cond->branch_false);
+      }
+    }
+    else {
+      /* Ordinary nodes just propagate the same branch. */
+      LISTBASE_FOREACH (GPUInput *, input, &node->inputs) {
+        propagate_input_branch(node, input->link, branch);
+      }
+    }
+  }
+
+  /* Build branch node lists from assignments. */
+  for (BranchInfo &info : branch_info) {
+    info.nodes.reserve(info.num_nodes);
+  }
+
+  LISTBASE_FOREACH (GPUNode *, node, &graph.nodes) {
+    NodeInfo &info = node_info[node->index];
+
+    if (info.branch >= 0) {
+      branch_info[info.branch].nodes.push_back(node);
+    }
+  }
+}
+
+void GPUCodegenSerializer::serialize(std::stringstream &eval_ss)
+{
+  build_branches();
+  branch_serialize(eval_ss, "", branch_info[0]);
+
+  if (output_link != nullptr) {
+    eval_ss << "return ";
+    node_serialize_output(eval_ss, output_link->output);
+    eval_ss << ";\n";
+  }
 }
 
 char *GPUCodegen::graph_serialize(eGPUNodeTag tree_tag, GPUNodeLink *output_link)
@@ -534,16 +989,10 @@ char *GPUCodegen::graph_serialize(eGPUNodeTag tree_tag, GPUNodeLink *output_link
     return nullptr;
   }
 
+  GPUCodegenSerializer serializer(graph, tree_tag, output_link);
+
   std::stringstream eval_ss;
-  /* NOTE: The node order is already top to bottom (or left to right in node editor)
-   * because of the evaluation order inside ntreeExecGPUNodes(). */
-  LISTBASE_FOREACH (GPUNode *, node, &graph.nodes) {
-    if ((node->tag & tree_tag) == 0) {
-      continue;
-    }
-    node_serialize(eval_ss, node);
-  }
-  eval_ss << "return " << output_link->output << ";\n";
+  serializer.serialize(eval_ss);
 
   char *eval_c_str = extract_c_str(eval_ss);
   BLI_hash_mm2a_add(&hm2a_, (uchar *)eval_c_str, eval_ss.str().size());
@@ -552,12 +1001,11 @@ char *GPUCodegen::graph_serialize(eGPUNodeTag tree_tag, GPUNodeLink *output_link
 
 char *GPUCodegen::graph_serialize(eGPUNodeTag tree_tag)
 {
+  GPUCodegenSerializer serializer(graph, tree_tag);
+
   std::stringstream eval_ss;
-  LISTBASE_FOREACH (GPUNode *, node, &graph.nodes) {
-    if (node->tag & tree_tag) {
-      node_serialize(eval_ss, node);
-    }
-  }
+  serializer.serialize(eval_ss);
+
   char *eval_c_str = extract_c_str(eval_ss);
   BLI_hash_mm2a_add(&hm2a_, (uchar *)eval_c_str, eval_ss.str().size());
   return eval_c_str;
@@ -664,6 +1112,7 @@ GPUPass *GPU_generate_pass(GPUMaterial *material,
                            void *thunk)
 {
   gpu_node_graph_prune_unused(graph);
+  gpu_node_graph_index_nodes(graph);
 
   /* Extract attributes before compiling so the generated VBOs are ready to accept the future
    * shader. */
