@@ -1899,12 +1899,7 @@ KeyBlock *BKE_keyblock_from_object(Object *ob)
 {
   Key *key = BKE_key_from_object(ob);
 
-  if (key) {
-    KeyBlock *kb = static_cast<KeyBlock *>(BLI_findlink(&key->block, ob->shapenr - 1));
-    return kb;
-  }
-
-  return nullptr;
+  return BKE_keyblock_find_index(key, ob->shapenr - 1);
 }
 
 KeyBlock *BKE_keyblock_from_object_reference(Object *ob)
@@ -1930,6 +1925,15 @@ KeyBlock *BKE_keyblock_from_key(Key *key, int index)
         return kb;
       }
     }
+  }
+
+  return nullptr;
+}
+
+KeyBlock *BKE_keyblock_find_index(Key *key, int index)
+{
+  if (key) {
+    return static_cast<KeyBlock *>(BLI_findlink(&key->block, index));
   }
 
   return nullptr;

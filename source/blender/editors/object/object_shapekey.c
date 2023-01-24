@@ -221,6 +221,15 @@ static bool shape_key_poll(bContext *C)
           !ID_IS_LINKED(data) && !ID_IS_OVERRIDE_LIBRARY(data));
 }
 
+static bool shape_key_exists_poll(bContext *C)
+{
+  Object *ob = ED_object_context(C);
+
+  return (shape_key_poll(C) &&
+          /* check a keyblock exists */
+          (BKE_keyblock_from_object(ob) != NULL));
+}
+
 static bool shape_key_mode_poll(bContext *C)
 {
   Object *ob = ED_object_context(C);
@@ -566,6 +575,96 @@ void OBJECT_OT_shape_key_move(wmOperatorType *ot)
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
 
   RNA_def_enum(ot->srna, "type", slot_move, 0, "Type", "");
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Shape Key Lock (Unlock) Operator
+ * \{ */
+
+enum {
+  SHAPE_KEY_LOCK,
+  SHAPE_KEY_UNLOCK,
+};
+
+static int shape_key_lock_exec(bContext *C, wmOperator *op)
+{
+  Object *ob = CTX_data_active_object(C);
+  int action = RNA_enum_get(op->ptr, "action");
+  Key *keys = BKE_key_from_object(ob);
+
+  if (!keys || BLI_listbase_is_empty(&keys->block)) {
+    return OPERATOR_CANCELLED;
+  }
+
+  LISTBASE_FOREACH (KeyBlock *, kb, &keys->block) {
+    switch (action) {
+      case SHAPE_KEY_LOCK:
+        kb->flag |= KEYBLOCK_LOCKED_SHAPE;
+        break;
+      case SHAPE_KEY_UNLOCK:
+        kb->flag &= ~KEYBLOCK_LOCKED_SHAPE;
+        break;
+      default:
+        BLI_assert(0);
+    }
+  }
+
+  WM_event_add_notifier(C, NC_OBJECT | ND_DRAW, ob);
+
+  return OPERATOR_FINISHED;
+}
+
+static char *shape_key_lock_description(bContext *UNUSED(C),
+                                        wmOperatorType *UNUSED(op),
+                                        PointerRNA *params)
+{
+  int action = RNA_enum_get(params, "action");
+
+  const char *action_str;
+
+  switch (action) {
+    case SHAPE_KEY_LOCK:
+      action_str = TIP_("Lock");
+      break;
+    case SHAPE_KEY_UNLOCK:
+      action_str = TIP_("Unlock");
+      break;
+    default:
+      return NULL;
+  }
+
+  return BLI_sprintfN(TIP_("%s all shape keys of the active object"), action_str);
+}
+
+void OBJECT_OT_shape_key_lock(wmOperatorType *ot)
+{
+  static const EnumPropertyItem shape_key_lock_actions[] = {
+      {SHAPE_KEY_LOCK, "LOCK", 0, "Lock", "Lock all shape keys"},
+      {SHAPE_KEY_UNLOCK, "UNLOCK", 0, "Unlock", "Unlock all shape keys"},
+      {0, NULL, 0, NULL, NULL},
+  };
+
+  /* identifiers */
+  ot->name = "Change the Lock On Shape Keys";
+  ot->idname = "OBJECT_OT_shape_key_lock";
+  ot->description = "Change the lock state of all shape keys of active object";
+
+  /* api callbacks */
+  ot->poll = shape_key_exists_poll;
+  ot->exec = shape_key_lock_exec;
+  ot->get_description = shape_key_lock_description;
+
+  /* flags */
+  ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+
+  RNA_def_enum(ot->srna,
+               "action",
+               shape_key_lock_actions,
+               SHAPE_KEY_LOCK,
+               "Action",
+               "Lock action to execute on vertex groups");
 }
 
 /** \} */

@@ -7,6 +7,7 @@
 
 #include "MEM_guardedalloc.h"
 
+#include "DNA_key_types.h"
 #include "DNA_mesh_types.h"
 #include "DNA_meshdata_types.h"
 #include "DNA_object_types.h"
@@ -23,6 +24,7 @@
 #include "BKE_context.h"
 #include "BKE_customdata.h"
 #include "BKE_editmesh.h"
+#include "BKE_key.h"
 #include "BKE_mesh.h"
 #include "BKE_mesh_runtime.h"
 #include "BKE_report.h"
@@ -1511,6 +1513,15 @@ void ED_mesh_report_mirror_ex(wmOperator *op, int totmirr, int totfail, char sel
 void ED_mesh_report_mirror(wmOperator *op, int totmirr, int totfail)
 {
   ED_mesh_report_mirror_ex(op, totmirr, totfail, SCE_SELECT_VERTEX);
+}
+
+bool ED_mesh_has_locked_shape_key(Mesh *me)
+{
+  BLI_assert(me->edit_mesh && me->edit_mesh->bm);
+
+  KeyBlock *key_block = BKE_keyblock_find_index(me->key, me->edit_mesh->bm->shapenr - 1);
+
+  return key_block && (key_block->flag & KEYBLOCK_LOCKED_SHAPE) != 0;
 }
 
 Mesh *ED_mesh_context(bContext *C)

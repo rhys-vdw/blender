@@ -584,6 +584,8 @@ int ED_mesh_sculpt_color_add(struct Mesh *me,
 void ED_mesh_report_mirror(struct wmOperator *op, int totmirr, int totfail);
 void ED_mesh_report_mirror_ex(struct wmOperator *op, int totmirr, int totfail, char selectmode);
 
+bool ED_mesh_has_locked_shape_key(struct Mesh *me);
+
 /**
  * Returns the pinned mesh, the mesh from the pinned object, or the mesh from the active object.
  */

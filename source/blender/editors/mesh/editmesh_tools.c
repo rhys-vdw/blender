@@ -2666,6 +2666,7 @@ static int edbm_do_smooth_vertex_exec(bContext *C, wmOperator *op)
 
   const Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
+  int tot_selected = 0, tot_locked = 0;
   uint objects_len = 0;
   Object **objects = BKE_view_layer_array_from_objects_in_edit_mode_unique_data(
       scene, view_layer, CTX_wm_view3d(C), &objects_len);
@@ -2680,6 +2681,13 @@ static int edbm_do_smooth_vertex_exec(bContext *C, wmOperator *op)
     if (em->bm->totvertsel == 0) {
       continue;
     }
+
+    if (ED_mesh_has_locked_shape_key(me)) {
+      tot_locked++;
+      continue;
+    }
+
+    tot_selected++;
 
     /* mirror before smooth */
     if (((Mesh *)obedit->data)->symmetry & ME_SYMMETRY_X) {
@@ -2743,6 +2751,15 @@ static int edbm_do_smooth_vertex_exec(bContext *C, wmOperator *op)
   }
   MEM_freeN(objects);
 
+  if (tot_locked) {
+    BKE_report(op->reports, RPT_WARNING, "The active shape key is locked");
+    return tot_selected ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
+  }
+  if (tot_selected == 0) {
+    BKE_report(op->reports, RPT_WARNING, "No selected vertex");
+    return OPERATOR_CANCELLED;
+  }
+
   return OPERATOR_FINISHED;
 }
 
@@ -2783,7 +2800,7 @@ void MESH_OT_vertices_smooth(wmOperatorType *ot)
 
 static int edbm_do_smooth_laplacian_vertex_exec(bContext *C, wmOperator *op)
 {
-  int tot_unselected = 0;
+  int tot_selected = 0, tot_locked = 0;
   const Scene *scene = CTX_data_scene(C);
   ViewLayer *view_layer = CTX_data_view_layer(C);
 
@@ -2809,9 +2826,15 @@ static int edbm_do_smooth_laplacian_vertex_exec(bContext *C, wmOperator *op)
     bool use_topology = (me->editflag & ME_EDIT_MIRROR_TOPO) != 0;
 
     if (em->bm->totvertsel == 0) {
-      tot_unselected++;
       continue;
     }
+
+    if (ED_mesh_has_locked_shape_key(me)) {
+      tot_locked++;
+      continue;
+    }
+
+    tot_selected++;
 
     /* Mirror before smooth. */
     if (((Mesh *)obedit->data)->symmetry & ME_SYMMETRY_X) {
@@ -2854,7 +2877,11 @@ static int edbm_do_smooth_laplacian_vertex_exec(bContext *C, wmOperator *op)
   }
   MEM_freeN(objects);
 
-  if (tot_unselected == objects_len) {
+  if (tot_locked > 0) {
+    BKE_report(op->reports, RPT_WARNING, "The active shape key is locked");
+    return tot_selected ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
+  }
+  if (tot_selected == 0) {
     BKE_report(op->reports, RPT_WARNING, "No selected vertex");
     return OPERATOR_CANCELLED;
   }
@@ -3718,6 +3745,7 @@ static int edbm_shape_propagate_to_all_exec(bContext *C, wmOperator *op)
   ViewLayer *view_layer = CTX_data_view_layer(C);
   int tot_shapekeys = 0;
   int tot_selected_verts_objects = 0;
+  int tot_locked = 0;
 
   uint objects_len = 0;
   Object **objects = BKE_view_layer_array_from_objects_in_edit_mode_unique_data(
@@ -3730,6 +3758,24 @@ static int edbm_shape_propagate_to_all_exec(bContext *C, wmOperator *op)
     if (em->bm->totvertsel == 0) {
       continue;
     }
+
+    /* Check for locked shape keys. */
+    if (me->key) {
+      bool found = false;
+
+      LISTBASE_FOREACH(KeyBlock *, kb, &me->key->block) {
+        if (kb->flag & KEYBLOCK_LOCKED_SHAPE) {
+          found = true;
+          break;
+        }
+      }
+
+      if (found) {
+        tot_locked++;
+        continue;
+      }
+    }
+
     tot_selected_verts_objects++;
 
     if (shape_propagate(em)) {
@@ -3745,6 +3791,10 @@ static int edbm_shape_propagate_to_all_exec(bContext *C, wmOperator *op)
   }
   MEM_freeN(objects);
 
+  if (tot_locked > 0) {
+    BKE_report(op->reports, RPT_ERROR, "The mesh has locked shape keys");
+    return tot_selected_verts_objects ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
+  }
   if (tot_selected_verts_objects == 0) {
     BKE_report(op->reports, RPT_ERROR, "No selected vertex");
     return OPERATOR_CANCELLED;
@@ -3814,7 +3864,7 @@ static int edbm_blend_from_shape_exec(bContext *C, wmOperator *op)
     kb_ref = BLI_findlink(&key_ref->block, shape_ref);
   }
 
-  int tot_selected_verts_objects = 0;
+  int tot_selected_verts_objects = 0, tot_locked = 0;
   uint objects_len = 0;
   Object **objects = BKE_view_layer_array_from_objects_in_edit_mode_unique_data(
       scene, view_layer, CTX_wm_view3d(C), &objects_len);
@@ -3829,6 +3879,12 @@ static int edbm_blend_from_shape_exec(bContext *C, wmOperator *op)
     if (em->bm->totvertsel == 0) {
       continue;
     }
+
+    if (ED_mesh_has_locked_shape_key(me)) {
+      tot_locked++;
+      continue;
+    }
+
     tot_selected_verts_objects++;
 
     if (!key) {
@@ -3871,6 +3927,10 @@ static int edbm_blend_from_shape_exec(bContext *C, wmOperator *op)
   }
   MEM_freeN(objects);
 
+  if (tot_locked > 0) {
+    BKE_report(op->reports, RPT_ERROR, "The active shape key is locked");
+    return tot_selected_verts_objects ? OPERATOR_FINISHED : OPERATOR_CANCELLED;
+  }
   if (tot_selected_verts_objects == 0) {
     BKE_report(op->reports, RPT_ERROR, "No selected vertex");
     return OPERATOR_CANCELLED;

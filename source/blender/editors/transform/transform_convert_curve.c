@@ -6,11 +6,14 @@
  */
 
 #include "DNA_curve_types.h"
+#include "DNA_key_types.h"
 
 #include "MEM_guardedalloc.h"
 
+#include "BKE_key.h"
 #include "BLI_listbase.h"
 #include "BLI_math.h"
+#include "BKE_report.h"
 
 #include "BKE_context.h"
 #include "BKE_curve.h"
@@ -88,6 +91,16 @@ static void createTransCurveVerts(bContext *UNUSED(C), TransInfo *t)
     View3D *v3d = t->view;
     short hide_handles = (v3d != NULL) ? (v3d->overlay.handle_display == CURVE_HANDLE_NONE) :
                                          false;
+
+    /* Avoid editing locked shapes. */
+    if (t->mode != TFM_DUMMY) {
+      KeyBlock *key_block = BKE_keyblock_find_index(cu->key, cu->editnurb->shapenr - 1);
+
+      if (key_block && (key_block->flag & KEYBLOCK_LOCKED_SHAPE) != 0) {
+        BKE_report(t->reports, RPT_WARNING, "The active shape key is locked");
+        continue;
+      }
+    }
 
     /* count total of vertices, check identical as in 2nd loop for making transdata! */
     ListBase *nurbs = BKE_curve_editNurbs_get(cu);

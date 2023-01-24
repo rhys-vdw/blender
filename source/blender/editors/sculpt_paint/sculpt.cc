@@ -5792,17 +5792,24 @@ static int sculpt_brush_stroke_invoke(bContext *C, wmOperator *op, const wmEvent
   Brush *brush = BKE_paint_brush(&sd->paint);
   SculptSession *ss = ob->sculpt;
 
-  if (SCULPT_tool_is_paint(brush->sculpt_tool) &&
-      !SCULPT_handles_colors_report(ob->sculpt, op->reports)) {
-    return OPERATOR_CANCELLED;
+  if (SCULPT_tool_is_paint(brush->sculpt_tool)) {
+    if (!SCULPT_handles_colors_report(ob->sculpt, op->reports)) {
+      return OPERATOR_CANCELLED;
+    }
   }
-  if (SCULPT_tool_is_mask(brush->sculpt_tool)) {
+  else if (SCULPT_tool_is_mask(brush->sculpt_tool)) {
     MultiresModifierData *mmd = BKE_sculpt_multires_active(ss->scene, ob);
     BKE_sculpt_mask_layers_ensure(CTX_data_depsgraph_pointer(C), CTX_data_main(C), ob, mmd);
   }
-  if (SCULPT_tool_is_face_sets(brush->sculpt_tool)) {
+  else if (SCULPT_tool_is_face_sets(brush->sculpt_tool)) {
     Mesh *mesh = BKE_object_get_original_mesh(ob);
     ss->face_sets = BKE_sculpt_face_sets_ensure(mesh);
+  }
+  else {
+    if (ss->shapekey_active && (ss->shapekey_active->flag & KEYBLOCK_LOCKED_SHAPE) != 0) {
+      BKE_report(op->reports, RPT_WARNING, "The active shape key is locked");
+      return OPERATOR_CANCELLED;
+    }
   }
 
   stroke = paint_stroke_new(C,

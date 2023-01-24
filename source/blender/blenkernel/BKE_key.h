@@ -87,9 +87,13 @@ struct KeyBlock *BKE_keyblock_add(struct Key *key, const char *name);
  */
 struct KeyBlock *BKE_keyblock_add_ctime(struct Key *key, const char *name, bool do_force);
 /**
- * Get the appropriate #KeyBlock given an index.
+ * Get the appropriate #KeyBlock given an index, excluding the first (0th) key. Key may be null.
  */
 struct KeyBlock *BKE_keyblock_from_key(struct Key *key, int index);
+/**
+ * Get the appropriate #KeyBlock given an index. Key may be null.
+ */
+struct KeyBlock *BKE_keyblock_find_index(struct Key *key, int index);
 /**
  * Get the appropriate #KeyBlock given a name to search for.
  */

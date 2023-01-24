@@ -6,6 +6,7 @@
  */
 
 #include "DNA_curve_types.h"
+#include "DNA_key_types.h"
 #include "DNA_lattice_types.h"
 
 #include "MEM_guardedalloc.h"
@@ -13,7 +14,9 @@
 #include "BLI_math.h"
 
 #include "BKE_context.h"
+#include "BKE_key.h"
 #include "BKE_lattice.h"
+#include "BKE_report.h"
 
 #include "transform.h"
 #include "transform_snap.h"
@@ -29,7 +32,8 @@ static void createTransLatticeVerts(bContext *UNUSED(C), TransInfo *t)
 {
   FOREACH_TRANS_DATA_CONTAINER (t, tc) {
 
-    Lattice *latt = ((Lattice *)tc->obedit->data)->editlatt->latt;
+    EditLatt *editlatt = ((Lattice *)tc->obedit->data)->editlatt;
+    Lattice *latt = editlatt->latt;
     TransData *td = NULL;
     BPoint *bp;
     float mtx[3][3], smtx[3][3];
@@ -37,6 +41,16 @@ static void createTransLatticeVerts(bContext *UNUSED(C), TransInfo *t)
     int count = 0, countsel = 0;
     const bool is_prop_edit = (t->flag & T_PROP_EDIT) != 0;
     const bool is_prop_connected = (t->flag & T_PROP_CONNECTED) != 0;
+
+    /* Avoid editing locked shapes. */
+    if (t->mode != TFM_DUMMY) {
+      KeyBlock *key_block = BKE_keyblock_find_index(latt->key, editlatt->shapenr - 1);
+
+      if (key_block && (key_block->flag & KEYBLOCK_LOCKED_SHAPE) != 0) {
+        BKE_report(t->reports, RPT_WARNING, "The active shape key is locked");
+        continue;
+      }
+    }
 
     bp = latt->def;
     a = latt->pntsu * latt->pntsv * latt->pntsw;

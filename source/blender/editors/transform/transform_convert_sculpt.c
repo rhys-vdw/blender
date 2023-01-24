@@ -14,6 +14,7 @@
 #include "BKE_lib_id.h"
 #include "BKE_paint.h"
 #include "BKE_report.h"
+#include "DNA_key_types.h"
 
 #include "ED_sculpt.h"
 
@@ -37,6 +38,13 @@ static void createTransSculpt(bContext *C, TransInfo *t)
   BKE_view_layer_synced_ensure(t->scene, t->view_layer);
   Object *ob = BKE_view_layer_active_object_get(t->view_layer);
   SculptSession *ss = ob->sculpt;
+
+  /* Avoid editing locked shapes. */
+  if (t->mode != TFM_DUMMY && ss->shapekey_active &&
+      (ss->shapekey_active->flag & KEYBLOCK_LOCKED_SHAPE) != 0) {
+    BKE_report(t->reports, RPT_WARNING, "The active shape key is locked");
+    return;
+  }
 
   {
     BLI_assert(t->data_container_len == 1);

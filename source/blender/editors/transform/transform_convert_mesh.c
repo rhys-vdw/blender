@@ -21,6 +21,7 @@
 #include "BKE_editmesh.h"
 #include "BKE_mesh.h"
 #include "BKE_modifier.h"
+#include "BKE_report.h"
 #include "BKE_scene.h"
 
 #include "ED_mesh.h"
@@ -1477,6 +1478,12 @@ static void createTransEditVerts(bContext *UNUSED(C), TransInfo *t)
     struct TransIslandData island_data = {NULL};
     struct TransMirrorData mirror_data = {NULL};
     struct TransMeshDataCrazySpace crazyspace_data = {NULL};
+
+    /* Avoid editing locked shapes. */
+    if (t->mode != TFM_DUMMY && ED_mesh_has_locked_shape_key(me)) {
+      BKE_report(t->reports, RPT_WARNING, "The active shape key is locked");
+      continue;
+    }
 
     /**
      * Quick check if we can transform.
