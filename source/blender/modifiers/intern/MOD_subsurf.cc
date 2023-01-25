@@ -242,14 +242,14 @@ static Mesh *modifyMesh(ModifierData *md, const ModifierEvalContext *ctx, Mesh *
   /* Delay evaluation to the draw code if possible, provided we do not have to apply the modifier.
    */
   if ((ctx->flag & MOD_APPLY_TO_BASE_MESH) == 0) {
-    Scene *scene = DEG_get_evaluated_scene(ctx->depsgraph);
     const bool is_render_mode = (ctx->flag & MOD_APPLY_RENDER) != 0;
     /* Same check as in `DRW_mesh_batch_cache_create_requested` to keep both code coherent. The
      * difference is that here we do not check for the final edit mesh pointer as it is not yet
      * assigned at this stage of modifier stack evaluation. */
     const bool is_editmode = (mesh->edit_mesh != nullptr);
     const int required_mode = BKE_subsurf_modifier_eval_required_mode(is_render_mode, is_editmode);
-    if (BKE_subsurf_modifier_can_do_gpu_subdiv(scene, ctx->object, mesh, smd, required_mode)) {
+    if (BKE_subsurf_modifier_can_do_gpu_subdiv(
+            ctx->depsgraph, ctx->object, mesh, smd, required_mode)) {
       subdiv_cache_mesh_wrapper_settings(ctx, mesh, smd, runtime_data);
       return result;
     }
@@ -425,8 +425,10 @@ static void panel_draw(const bContext *C, Panel *panel)
   SubsurfModifierData *smd = static_cast<SubsurfModifierData *>(ptr->data);
   Object *ob = static_cast<Object *>(ob_ptr.data);
   const Mesh *mesh = static_cast<const Mesh *>(ob->data);
-  if (BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(smd, mesh)) {
-    uiItemL(layout, "Autosmooth or custom normals detected, disabling GPU subdivision", ICON_INFO);
+  if (BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(depsgraph, ob, mesh, smd)) {
+    uiItemL(layout,
+            "Disabling GPU subdivision: autosmooth, custom normals or dependencies detected",
+            ICON_INFO);
   }
   else if (Object *ob_eval = DEG_get_evaluated_object(depsgraph, ob)) {
     if (ModifierData *md_eval = BKE_modifiers_findby_name(ob_eval, smd->modifier.name)) {

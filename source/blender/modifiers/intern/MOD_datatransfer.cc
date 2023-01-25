@@ -124,6 +124,7 @@ static void updateDepsgraph(ModifierData *md, const ModifierUpdateDepsgraphConte
     DEG_add_object_relation(
         ctx->node, dtmd->ob_source, DEG_OB_COMP_GEOMETRY, "DataTransfer Modifier");
     DEG_add_customdata_mask(ctx->node, dtmd->ob_source, &cddata_masks);
+    DEG_add_special_eval_flag(ctx->node, &dtmd->ob_source->id, DAG_EVAL_NEED_CPU_SUBSURF);
 
     if (dtmd->flags & MOD_DATATRANSFER_OBSRC_TRANSFORM) {
       DEG_add_object_relation(

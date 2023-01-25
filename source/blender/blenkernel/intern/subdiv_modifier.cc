@@ -14,6 +14,7 @@
 #include "BKE_mesh.h"
 #include "BKE_modifier.h"
 #include "BKE_subdiv.h"
+#include "DEG_depsgraph_query.h"
 
 #include "GPU_capabilities.h"
 #include "GPU_context.h"
@@ -112,8 +113,25 @@ static bool is_subdivision_evaluation_possible_on_gpu()
   return true;
 }
 
-bool BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(const SubsurfModifierData *smd,
-                                                                const Mesh *mesh)
+static bool subsurf_modifier_has_cpu_dependents(const Depsgraph *depsgraph, const Object *ob)
+{
+  /* The sculpt mode UI requires the mesh. */
+  if (ob->mode & OB_MODE_ALL_SCULPT) {
+    return true;
+  }
+
+  /* Some dependencies request it through depsgraph. */
+  if (DEG_get_eval_flags_for_id(depsgraph, &ob->id) & DAG_EVAL_NEED_CPU_SUBSURF) {
+    return true;
+  }
+
+  return false;
+}
+
+bool BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(const Depsgraph *depsgraph,
+                                                                const Object *ob,
+                                                                const Mesh *mesh,
+                                                                const SubsurfModifierData *smd)
 {
   if ((U.gpu_flag & USER_GPU_FLAG_SUBDIVISION_EVALUATION) == 0) {
     /* GPU subdivision is explicitly disabled, so we don't force it. */
@@ -125,10 +143,11 @@ bool BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(const SubsurfMod
     return false;
   }
 
-  return subsurf_modifier_use_autosmooth_or_split_normals(smd, mesh);
+  return subsurf_modifier_use_autosmooth_or_split_normals(smd, mesh) ||
+         subsurf_modifier_has_cpu_dependents(depsgraph, ob);
 }
 
-bool BKE_subsurf_modifier_can_do_gpu_subdiv(const Scene *scene,
+bool BKE_subsurf_modifier_can_do_gpu_subdiv(const Depsgraph *depsgraph,
                                             const Object *ob,
                                             const Mesh *mesh,
                                             const SubsurfModifierData *smd,
@@ -144,6 +163,12 @@ bool BKE_subsurf_modifier_can_do_gpu_subdiv(const Scene *scene,
     return false;
   }
 
+  /* Deactivate if some other dependencies need a final CPU mesh. */
+  if (subsurf_modifier_has_cpu_dependents(depsgraph, ob)) {
+    return false;
+  }
+
+  const Scene *scene = DEG_get_evaluated_scene(depsgraph);
   ModifierData *md = modifier_get_last_enabled_for_mode(scene, ob, required_mode);
   if (md != (const ModifierData *)smd) {
     return false;

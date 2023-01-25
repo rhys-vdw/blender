@@ -108,12 +108,14 @@ static void updateDepsgraph(ModifierData *md, const ModifierUpdateDepsgraphConte
   if ((bmd->flag & eBooleanModifierFlag_Object) && bmd->object != nullptr) {
     DEG_add_object_relation(ctx->node, bmd->object, DEG_OB_COMP_TRANSFORM, "Boolean Modifier");
     DEG_add_object_relation(ctx->node, bmd->object, DEG_OB_COMP_GEOMETRY, "Boolean Modifier");
+    DEG_add_special_eval_flag(ctx->node, &bmd->object->id, DAG_EVAL_NEED_CPU_SUBSURF);
   }
 
   Collection *col = bmd->collection;
 
   if ((bmd->flag & eBooleanModifierFlag_Collection) && col != nullptr) {
     DEG_add_collection_geometry_relation(ctx->node, col, "Boolean Modifier");
+    DEG_add_collection_geometry_special_eval_flag(ctx->node, col, DAG_EVAL_NEED_CPU_SUBSURF);
   }
   /* We need own transformation as well. */
   DEG_add_depends_on_transform_relation(ctx->node, "Boolean Modifier");

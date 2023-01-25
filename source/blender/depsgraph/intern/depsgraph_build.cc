@@ -122,6 +122,19 @@ void DEG_add_collection_geometry_customdata_mask(DepsNodeHandle *node_handle,
   FOREACH_COLLECTION_OBJECT_RECURSIVE_END;
 }
 
+void DEG_add_collection_geometry_special_eval_flag(struct DepsNodeHandle *node_handle,
+                                                   struct Collection *collection,
+                                                   uint32_t flag)
+{
+  FOREACH_COLLECTION_OBJECT_RECURSIVE_BEGIN (collection, ob) {
+    DEG_add_special_eval_flag(node_handle, &ob->id, flag);
+    if (ob->type == OB_EMPTY && ob->instance_collection != nullptr) {
+      DEG_add_collection_geometry_special_eval_flag(node_handle, ob->instance_collection, flag);
+    }
+  }
+  FOREACH_COLLECTION_OBJECT_RECURSIVE_END;
+}
+
 void DEG_add_simulation_relation(DepsNodeHandle *node_handle,
                                  Simulation *simulation,
                                  const char *description)

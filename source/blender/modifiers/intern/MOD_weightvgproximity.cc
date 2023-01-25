@@ -381,6 +381,8 @@ static void updateDepsgraph(ModifierData *md, const ModifierUpdateDepsgraphConte
         wmd->proximity_mode == MOD_WVG_PROXIMITY_GEOMETRY) {
       DEG_add_object_relation(
           ctx->node, wmd->proximity_ob_target, DEG_OB_COMP_GEOMETRY, "WeightVGProximity Modifier");
+      DEG_add_special_eval_flag(
+          ctx->node, &wmd->proximity_ob_target->id, DAG_EVAL_NEED_CPU_SUBSURF);
     }
     need_transform_relation = true;
   }

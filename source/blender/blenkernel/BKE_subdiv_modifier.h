@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include "BKE_DerivedMesh.h"
 #include "BKE_subdiv.h"
 
 #include "BLI_sys_types.h"
@@ -68,12 +69,15 @@ bool BKE_subsurf_modifier_use_custom_loop_normals(const struct SubsurfModifierDa
  * and supported by the GPU. It is mainly useful for showing UI messages.
  */
 bool BKE_subsurf_modifier_force_disable_gpu_evaluation_for_mesh(
-    const struct SubsurfModifierData *smd, const struct Mesh *mesh);
+    const struct Depsgraph *depsgraph,
+    const struct Object *ob,
+    const struct Mesh *mesh,
+    const struct SubsurfModifierData *smd);
 /**
  * \param skip_check_is_last: When true, we assume that the modifier passed is the last enabled
  * modifier in the stack.
  */
-bool BKE_subsurf_modifier_can_do_gpu_subdiv(const struct Scene *scene,
+bool BKE_subsurf_modifier_can_do_gpu_subdiv(const struct Depsgraph *depsgraph,
                                             const struct Object *ob,
                                             const struct Mesh *mesh,
                                             const struct SubsurfModifierData *smd,

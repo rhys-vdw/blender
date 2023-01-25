@@ -1306,6 +1306,7 @@ void DepsgraphRelationBuilder::build_constraints(ID *id,
           add_relation(target_transform_key, constraint_op_key, cti->name);
           add_relation(target_geometry_key, constraint_op_key, cti->name);
           add_customdata_mask(ct->tar, DEGCustomDataMeshMasks::MaskVert(CD_MASK_MDEFORMVERT));
+          add_special_eval_flag(&ct->tar->id, DAG_EVAL_NEED_CPU_SUBSURF);
         }
         else if (con->type == CONSTRAINT_TYPE_SHRINKWRAP) {
           bShrinkwrapConstraint *scon = (bShrinkwrapConstraint *)con->data;
@@ -1313,6 +1314,7 @@ void DepsgraphRelationBuilder::build_constraints(ID *id,
           /* Constraints which requires the target object surface. */
           ComponentKey target_key(&ct->tar->id, NodeType::GEOMETRY);
           add_relation(target_key, constraint_op_key, cti->name);
+          add_special_eval_flag(&ct->tar->id, DAG_EVAL_NEED_CPU_SUBSURF);
 
           /* Add dependency on normal layers if necessary. */
           if (ct->tar->type == OB_MESH && scon->shrinkType != MOD_SHRINKWRAP_NEAREST_VERTEX) {

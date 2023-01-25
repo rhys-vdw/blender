@@ -134,6 +134,9 @@ void DEG_add_collection_geometry_relation(struct DepsNodeHandle *node_handle,
 void DEG_add_collection_geometry_customdata_mask(struct DepsNodeHandle *node_handle,
                                                  struct Collection *collection,
                                                  const struct CustomData_MeshMasks *masks);
+void DEG_add_collection_geometry_special_eval_flag(struct DepsNodeHandle *node_handle,
+                                                   struct Collection *collection,
+                                                   uint32_t flag);
 void DEG_add_simulation_relation(struct DepsNodeHandle *node_handle,
                                  struct Simulation *simulation,
                                  const char *description);
